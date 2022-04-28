@@ -17,6 +17,8 @@ library(effectsize)
 library(visdat)
 library(Hmisc)
 library(table1)
+library(ggdist)
+library(gghalves)
 
 
 # 1. load data frame sced1 ----
@@ -59,12 +61,33 @@ thi$thi <- factor(thi$thi,levels = c('thi_pre','thi_post'),ordered = TRUE)
 
 ggplot(thi, aes(thi, value, fill = thi)) + geom_boxplot(show.legend = FALSE) + ylab("thi value") + xlab("time") + theme_classic(base_size = 14) + scale_fill_manual(values=c("#12737b", "#f2953d"))
 
-ggplot(aes(questionnaire, mean, fill = questionnaire)) + scale_fill_manual(values=c("#12737b", "#f2953d", "#b4522e")) + geom_boxplot(show.legend = FALSE) + ylab("mean usage") + xlab("module") + theme_classic(base_size = 16) + geom_hline(yintercept = 84, linetype = "dashed", color = "black", size = 1)
+ggplot(thi, aes(thi, value, fill = thi)) + ylab("thi value") + xlab("time") + theme_classic(base_size = 14) + scale_fill_manual(values=c("#12737b", "#f2953d")) +
+  ggdist::stat_halfeye(
+    adjust = .5, 
+    width = .6, 
+    .width = 0, 
+    justification = -.3, 
+    point_colour = NA, show.legend = FALSE) + 
+  geom_boxplot(
+    width = .25, 
+    outlier.shape = NA, show.legend = FALSE
+  ) +
+  geom_point(
+    size = 1.3, show.legend = FALSE,
+    alpha = .3,
+    position = position_jitter(
+      seed = 1, width = .1
+    )
+  ) + 
+  coord_cartesian(xlim = c(1.2, NA), clip = "off")
+
 
 #mean thi diff
-summarise(subjects, mean(thi_diff))
-summarise(subjects, median(thi_diff))
+table1(~ thi_pre + thi_post + thi_diff + phq9_score, data = subjects)
+t.test(subjects$thi_pre, subjects$thi_post, paired = TRUE)
+cohens_d(subjects$thi_pre, subjects$thi_post, paired = TRUE)
 
+subjects %>% count(thi_diff >= 7)
 
 # 3. questionnaire data: visual analysis and MLM ----
 app <- select(sced, case_id, group_id, questionnaire, age, sex, duration_tin_mon, thi_pre, phq9_score, bfi2_extraversion, bfi2_neg_emotion, con_days, base_days, int_days, magic_days, loudness_cur:emotion_tod)
@@ -179,22 +202,48 @@ df[,16:25] <- imp
 
 #visual analysis: distress & loudness
 ggplot(df, aes(con_days, distress_cur)) + geom_line(aes(colour = case_id), show.legend = FALSE) +
-  facet_wrap(~ case_id, nrow = 5) +
-  xlab("days") + ylab("tinnitus distress")
+  facet_wrap(~ case_id, nrow = 7) +
+  xlab("days") + ylab("tinnitus distress") + theme_ggdist()
 
 ggplot(df, aes(con_days, loudness_cur)) + geom_line(aes(colour = case_id), show.legend = FALSE) +
-  facet_wrap(~ case_id, nrow = 5) +
-  xlab("days") + ylab("tinnitus loudness")
+  facet_wrap(~ case_id, nrow = 7) +
+  xlab("days") + ylab("tinnitus loudness") + theme_ggdist()
+
+ggplot(df) + geom_line(aes(con_days, distress_cur), colour = "#12737b") + geom_line(aes(con_days, loudness_cur), colour = "#f2953d") + facet_wrap(~ case_id, nrow = 4) + theme_ggdist()
 
 # Mixed effect model
-mod1 <- lmer(distress_cur ~ con_days + (1|case_id), data = df)
-summary(mod1)
-performance(mod1) 
-confint(mod1)
-
-mod2 <- lmer(distress_cur ~ con_days + age + sex + duration_tin_mon + thi_pre + phq9_score + (1|case_id), data = df)
+mod2 <- lmer(distress_cur ~ con_days + 
+               intervention +
+               age + 
+               sex +
+               thi_pre +
+               phq9_score +
+               (1|case_id),
+             data = df)
 summary(mod2)
 performance(mod2)
 confint(mod2)
+check_model(mod2)
 
-compare_performance(mod1,mod2)
+# Data split ----
+
+library(tidymodels)
+innitial_split <- initial_split(df, prop = 4/5)
+training <- training(innitial_split)
+testing <- testing(innitial_split)
+mod2 <- lmer(distress_cur ~ con_days + 
+               intervention +
+               age + 
+               sex +
+               thi_pre +
+               phq9_score +
+               (1|case_id),
+             data = training)
+
+test_results <- as.data.frame(predict(mod2, testing) %>% cbind(testing$distress_cur))
+rsq_vec(estimate = test_results$`.`, truth = test_results$V2)
+
+ggplot(test_results, aes(x = `.`, y = V2)) +
+         geom_point()
+
+       
